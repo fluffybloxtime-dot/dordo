@@ -5,7 +5,7 @@ import time
 import telebot
 
 # Импортируем токен и хранилище
-from config import BOT_TOKEN, messages_storage
+from config import BOT_TOKEN, messages_storage, save_schedule
 
 # Настройка логирования
 logging.basicConfig(
@@ -100,6 +100,7 @@ def set_group(message):
     try:
         group_id = int(group_id_str)
         messages_storage['group_id'] = group_id
+        save_schedule(messages_storage)  # СОХРАНЯЕМ!
         
         bot.reply_to(message, 
             f"✅ Группа установлена!\n\n"
@@ -356,7 +357,6 @@ def add_schedule(message):
             parse_mode='Markdown')
         return
     
-    # Проверка времени
     try:
         datetime.strptime(time_str, '%H:%M')
     except ValueError:
@@ -368,6 +368,7 @@ def add_schedule(message):
     
     # Добавляем в расписание
     messages_storage['weekly_schedule'][day][time_str] = schedule_text
+    save_schedule(messages_storage)  # СОХРАНЯЕМ!
     
     bot.reply_to(message, 
         f"✅ Добавлено!\n\n"
@@ -405,6 +406,7 @@ def remove_schedule(message):
     # Удаляем из расписания
     if time_str in messages_storage['weekly_schedule'][day]:
         del messages_storage['weekly_schedule'][day][time_str]
+        save_schedule(messages_storage)  # СОХРАНЯЕМ!
         bot.reply_to(message, 
             f"✅ Удалено!\n\n"
             f"📅 День: {DAYS_NAME_RU[day]}\n"
@@ -450,6 +452,7 @@ def clear_week(message):
         'saturday': {},
         'sunday': {}
     }
+    save_schedule(messages_storage)  # СОХРАНЯЕМ!
     bot.reply_to(message, "✅ Расписание очищено!", parse_mode='Markdown')
 
 
