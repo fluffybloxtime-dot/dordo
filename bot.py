@@ -22,7 +22,6 @@ user_chats = set()
 
 # Флаг для остановки потока
 stop_scheduler = False
-
 # Дни недели
 DAYS_RU = {
     0: 'monday',
@@ -71,12 +70,21 @@ def start(message):
 
 *📅 /week_schedule* - Управление расписанием на неделю
 
+*📆 /add_daily* - Добавить ежедневную отправку (каждый день в указанное время)
+    Пример: `/add_daily 09:00 Доброе утро!`
+
+*🗑️ /remove_daily* - Удалить ежедневную отправку
+    Пример: `/remove_daily 09:00`
+
+*📊 /show_daily* - Показать ежедневное расписание
+
 *📋 /status* - Показать статус всех настроек
 
 *ℹ️ /help* - Показать эту справку
     """
     
     bot.reply_to(message, help_text, parse_mode='Markdown')
+
 
 
 @bot.message_handler(commands=['set_group'])
@@ -300,6 +308,11 @@ def help_command(message):
 
 *📅 /week_schedule* - Управление расписанием на неделю
 
+Ежедневные отправки (одни и те же времена каждый день):
+*➕ /add_daily <Время> <Текст>* - Добавить ежедневную отправку
+*❌ /remove_daily <Время>* - Удалить время из ежедневного расписания
+*📊 /show_daily* - Показать ежедневное расписание
+
 *📋 /status* - Показать все текущие настройки
 
 *ℹ️ /help* - Показать эту справку
@@ -326,6 +339,11 @@ def week_schedule_menu(message):
 *🔄 /clear_week* - Очистить всё расписание
 
 Дни недели: monday, tuesday, wednesday, thursday, friday, saturday, sunday
+
+Также, если нужно одно и то же время каждый день, используйте ежедневные команды:
+*➕ /add_daily <Время> <Текст>* — добавить ежедневную отправку
+*❌ /remove_daily <Время>* — удалить ежедневную отправку
+*📊 /show_daily* — показать ежедневное расписание
     """
     bot.reply_to(message, help_text, parse_mode='Markdown')
 
@@ -422,16 +440,16 @@ def remove_schedule(message):
 @bot.message_handler(commands=['show_week'])
 def show_week(message):
     """Команда /show_week - Показать расписание на неделю"""
-    schedule_text = "📅 *Расписание на неделю:*\n\n"
+    schedule_text = "📅 *РАСПИСАНИЕ НА НЕДЕЛЮ:*\n\n"
     
     has_schedule = False
     for day_eng, day_ru in DAYS_NAME_RU.items():
         day_schedule = messages_storage['weekly_schedule'][day_eng]
         if day_schedule:
             has_schedule = True
-            schedule_text += f"*{day_ru}:*\n"
+            schedule_text += f"*📌 {day_ru}:*\n"
             for time, text in sorted(day_schedule.items()):
-                schedule_text += f"  ⏰ {time} - {text}\n"
+                schedule_text += f"   ⏰ {time} → {text}\n"
             schedule_text += "\n"
     
     if not has_schedule:
@@ -467,46 +485,131 @@ def handle_message(message):
         parse_mode='Markdown')
 
 
+@bot.message_handler(commands=['add_daily'])
+def add_daily(message):
+    """Команда /add_daily <Время> <Текст> - Добавить время для ежедневной отправки"""
+    args = message.text.split(maxsplit=2)
+    if len(args) < 3:
+        bot.reply_to(message,
+            "❌ Неправильный формат!\n\nИспользуйте: `/add_daily 09:00 Текст сообщения`",
+            parse_mode='Markdown')
+        return
+
+    time_str = args[1]
+    schedule_text = args[2]
+    try:
+        datetime.strptime(time_str, '%H:%M')
+    except ValueError:
+        bot.reply_to(message,
+            "❌ Неправильный формат времени!\n\nИспользуйте формат: `ЧЧ:МИН` (например: `09:00`)",
+            parse_mode='Markdown')
+        return
+
+    messages_storage.setdefault('daily_schedule', {})[time_str] = schedule_text
+    save_schedule(messages_storage)
+    bot.reply_to(message, f"✅ Ежедневная отправка добавлена: {time_str} → {schedule_text}", parse_mode='Markdown')
+    logger.info(f"Добавлено ежедневное расписание: {time_str} - {schedule_text}")
+
+
+@bot.message_handler(commands=['remove_daily'])
+def remove_daily(message):
+    """Команда /remove_daily <Время> - Удалить время из ежедневного расписания"""
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        bot.reply_to(message,
+            "❌ Укажите время!\n\nПример: `/remove_daily 09:00`",
+            parse_mode='Markdown')
+        return
+
+    time_str = args[1]
+    daily = messages_storage.get('daily_schedule', {})
+    if time_str in daily:
+        del daily[time_str]
+        save_schedule(messages_storage)
+        bot.reply_to(message, f"✅ Ежедневная отправка {time_str} удалена.", parse_mode='Markdown')
+        logger.info(f"Удалено ежедневное время: {time_str}")
+    else:
+        bot.reply_to(message, "❌ Время не найдено в ежедневном расписании.", parse_mode='Markdown')
+
+
+@bot.message_handler(commands=['show_daily'])
+def show_daily(message):
+    """Показать ежедневное расписание"""
+    daily = messages_storage.get('daily_schedule', {})
+    if not daily:
+        bot.reply_to(message, "📅 Ежедневное расписание пусто.", parse_mode='Markdown')
+        return
+
+    text = "📅 *Ежедневное расписание:*\n\n"
+    for t, txt in sorted(daily.items()):
+        text += f"   ⏰ {t} → {txt}\n"
+    bot.reply_to(message, text, parse_mode='Markdown')
+
+
 def scheduled_sender():
     """Функция для отправки сообщений по расписанию"""
     global stop_scheduler
-    last_sent = {}
+    last_sent_times = set()  # Хранит уже отправленные времена
     
     while not stop_scheduler:
-        group_id = messages_storage['group_id']
+        try:
+            group_id = messages_storage['group_id']
+            
+            # Получаем текущий день и время
+            now = datetime.now()
+            current_day = DAYS_RU[now.weekday()]
+            current_time = now.strftime('%H:%M')
+            
+            # ОТЛАДКА: Показываем текущее время в начале минуты
+            if now.second == 0:
+                logger.info(f"⏰ Проверка: {current_time} ({DAYS_NAME_RU[current_day]})")
+            
+            # Получаем расписание на сегодня
+            day_schedule = messages_storage['weekly_schedule'].get(current_day, {})
+            daily_schedule = messages_storage.get('daily_schedule', {})
+            
+            # Проверяем все времена в расписании
+            if group_id is not None:
+                # Сначала проверяем недельное расписание
+                if day_schedule:
+                    for time_slot, schedule_text in day_schedule.items():
+                        send_key = f"{current_day}_{time_slot}"
+                        if time_slot == current_time and send_key not in last_sent_times:
+                            logger.info(f"✅ ОТПРАВКА (неделя) В {current_time}: {schedule_text}")
+                            try:
+                                bot.send_message(
+                                    chat_id=group_id,
+                                    text=f"🤖 *{schedule_text}*",
+                                    parse_mode='Markdown'
+                                )
+                                last_sent_times.add(send_key)
+                                logger.info(f"✅ УСПЕШНО ОТПРАВЛЕНО (неделя)!")
+                            except Exception as e:
+                                logger.error(f"❌ Ошибка при отправке (неделя): {e}")
+                        elif time_slot != current_time and send_key in last_sent_times:
+                            last_sent_times.discard(send_key)
+
+                # Затем ежедневное расписание (каждый день одинаково)
+                if daily_schedule:
+                    for time_slot, schedule_text in daily_schedule.items():
+                        send_key = f"daily_{time_slot}"
+                        if time_slot == current_time and send_key not in last_sent_times:
+                            logger.info(f"✅ ОТПРАВКА (ежедневно) В {current_time}: {schedule_text}")
+                            try:
+                                bot.send_message(
+                                    chat_id=group_id,
+                                    text=f"🤖 *{schedule_text}*",
+                                    parse_mode='Markdown'
+                                )
+                                last_sent_times.add(send_key)
+                                logger.info(f"✅ УСПЕШНО ОТПРАВЛЕНО (ежедневно)!")
+                            except Exception as e:
+                                logger.error(f"❌ Ошибка при отправке (ежедневно): {e}")
+                        elif time_slot != current_time and send_key in last_sent_times:
+                            last_sent_times.discard(send_key)
         
-        # Получаем текущий день и время
-        now = datetime.now()
-        current_day = DAYS_RU[now.weekday()]
-        current_time = now.strftime('%H:%M')
-        
-        # ОТЛАДКА: Показываем текущее время и расписание каждую минуту
-        day_schedule = messages_storage['weekly_schedule'][current_day]
-        if now.second == 0:  # Только в начале минуты
-            logger.info(f"⏰ Текущее время: {current_time} ({DAYS_NAME_RU[current_day]})")
-            logger.info(f"📅 Расписание на сегодня: {day_schedule}")
-        
-        # Проверяем еженедельное расписание
-        if day_schedule and group_id is not None:
-            for time_slot, schedule_text in day_schedule.items():
-                key = f"{current_day}_{time_slot}"
-                
-                # Проверяем если время совпадает и мы ещё не отправили в эту минуту
-                if time_slot == current_time and key not in last_sent:
-                    try:
-                        bot.send_message(
-                            chat_id=group_id,
-                            text=f"🤖 *{schedule_text}*",
-                            parse_mode='Markdown'
-                        )
-                        logger.info(f"✅ ОТПРАВЛЕНО В {current_time}: {schedule_text}")
-                        last_sent[key] = True
-                    except Exception as e:
-                        logger.error(f"❌ Ошибка при отправке: {e}")
-                
-                # Очищаем память если прошла минута
-                elif time_slot != current_time and key in last_sent:
-                    del last_sent[key]
+        except Exception as e:
+            logger.error(f"❌ Ошибка в scheduled_sender: {e}")
         
         time.sleep(1)
 
