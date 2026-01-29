@@ -639,30 +639,31 @@ def scheduled_sender():
                                 logger.error(f"❌ Ошибка при отправке (ежедневно): {e}")
                         elif time_slot != current_time and send_key in last_sent_times:
                             last_sent_times.discard(send_key)
-                    # Обработка одноразовых отправок на сегодня
-                    if one_off_today:
-                        for time_slot, schedule_text in one_off_today.copy().items():
-                            send_key = f"oneoff_{now.strftime('%Y-%m-%d')}_{time_slot}"
-                            if time_slot == current_time and send_key not in last_sent_times:
-                                logger.info(f"✅ ОТПРАВКА (one-off) В {current_time}: {schedule_text}")
+
+                # Обработка одноразовых отправок на сегодня (независимо от ежедневного расписания)
+                if one_off_today:
+                    for time_slot, schedule_text in one_off_today.copy().items():
+                        send_key = f"oneoff_{now.strftime('%Y-%m-%d')}_{time_slot}"
+                        if time_slot == current_time and send_key not in last_sent_times:
+                            logger.info(f"✅ ОТПРАВКА (one-off) В {current_time}: {schedule_text}")
+                            try:
+                                bot.send_message(
+                                    chat_id=group_id,
+                                    text=f"🤖 *{schedule_text}*",
+                                    parse_mode='Markdown'
+                                )
+                                last_sent_times.add(send_key)
+                                # удаляем одноразовую запись после отправки
                                 try:
-                                    bot.send_message(
-                                        chat_id=group_id,
-                                        text=f"🤖 *{schedule_text}*",
-                                        parse_mode='Markdown'
-                                    )
-                                    last_sent_times.add(send_key)
-                                    # удаляем одноразовую запись после отправки
-                                    try:
-                                        del messages_storage['one_off'][now.strftime('%Y-%m-%d')][time_slot]
-                                    except Exception:
-                                        pass
-                                    save_schedule(messages_storage)
-                                    logger.info(f"✅ УСПЕШНО ОТПРАВЛЕНО (one-off)!")
-                                except Exception as e:
-                                    logger.error(f"❌ Ошибка при отправке (one-off): {e}")
-                            elif time_slot != current_time and send_key in last_sent_times:
-                                last_sent_times.discard(send_key)
+                                    del messages_storage['one_off'][now.strftime('%Y-%m-%d')][time_slot]
+                                except Exception:
+                                    pass
+                                save_schedule(messages_storage)
+                                logger.info(f"✅ УСПЕШНО ОТПРАВЛЕНО (one-off)!")
+                            except Exception as e:
+                                logger.error(f"❌ Ошибка при отправке (one-off): {e}")
+                        elif time_slot != current_time and send_key in last_sent_times:
+                            last_sent_times.discard(send_key)
         
         except Exception as e:
             logger.error(f"❌ Ошибка в scheduled_sender: {e}")
