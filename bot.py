@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Thread
 import time
 import telebot
@@ -22,7 +22,6 @@ user_chats = set()
 
 # Флаг для остановки потока
 stop_scheduler = False
-
 # Дни недели
 DAYS_RU = {
     0: 'monday',
@@ -71,6 +70,14 @@ def start(message):
 
 *📅 /week_schedule* - Управление расписанием на неделю
 
+*📆 /add_daily* - Добавить ежедневную отправку (каждый день в указанное время)
+    Пример: `/add_daily 09:00 Доброе утро!`
+
+*🗑️ /remove_daily* - Удалить ежедневную отправку
+    Пример: `/remove_daily 09:00`
+
+*📊 /show_daily* - Показать ежедневное расписание
+
 *📋 /status* - Показать статус всех настроек
 
 *ℹ️ /help* - Показать эту справку
@@ -79,15 +86,16 @@ def start(message):
     bot.reply_to(message, help_text, parse_mode='Markdown')
 
 
-@bot.message_handler(commands=['set_group'])
-def set_group(message):
-    """Команда /set_group - Установить ID группы для отправки"""
+
+@bot.message_handler(commands=['add_group'])
+def add_group(message):
+    """Команда /add_group - Добавить группу для отправки"""
     args = message.text.split(maxsplit=1)
     
     if len(args) < 2:
         bot.reply_to(message, 
             "❌ Пожалуйста, укажите ID группы!\n\n"
-            "Используйте: `/set_group -1001234567890`\n\n"
+            "Используйте: `/add_group -1001234567890`\n\n"
             "📖 Как получить ID группы:\n"
             "1. Добавьте бота в группу\n"
             "2. Напишите в группе: `/get_group_id`\n"
@@ -99,14 +107,18 @@ def set_group(message):
     
     try:
         group_id = int(group_id_str)
-        messages_storage['group_id'] = group_id
-        save_schedule(messages_storage)  # СОХРАНЯЕМ!
-        
-        bot.reply_to(message, 
-            f"✅ Группа установлена!\n\n"
-            f"📋 ID группы: `{group_id}`",
-            parse_mode='Markdown')
-        logger.info(f"Группа установлена: {group_id}")
+        if group_id not in messages_storage['group_ids']:
+            messages_storage['group_ids'].append(group_id)
+            save_schedule(messages_storage)
+            bot.reply_to(message, 
+                f"✅ Группа добавлена!\n\n"
+                f"📋 ID группы: `{group_id}`",
+                parse_mode='Markdown')
+            logger.info(f"Группа добавлена: {group_id}")
+        else:
+            bot.reply_to(message, 
+                f"⚠️ Группа `{group_id}` уже в списке!",
+                parse_mode='Markdown')
     except ValueError:
         bot.reply_to(message, 
             "❌ Неправильный ID группы!\n\n"
@@ -114,54 +126,83 @@ def set_group(message):
             parse_mode='Markdown')
 
 
-@bot.message_handler(commands=['get_group_id'])
-def get_group_id(message):
-    """Команда /get_group_id - Показать ID текущей группы"""
-    bot.send_message(
-        chat_id=message.chat.id,
-        text=f"🆔 ID этой группы/чата: `{message.chat.id}`\n\n"
-             f"Используйте эту команду:\n`/set_group {message.chat.id}`",
-        parse_mode='Markdown'
-    )
-
-
-@bot.message_handler(commands=['get_group'])
-def get_group(message):
-    """Команда /get_group - Показать текущую установленную группу"""
-    if messages_storage['group_id'] is None:
+@bot.message_handler(commands=['remove_group'])
+def remove_group(message):
+    """Команда /remove_group - Удалить группу из списка"""
+    args = message.text.split(maxsplit=1)
+    
+    if len(args) < 2:
         bot.reply_to(message, 
-            "❌ Группа не установлена!\n\n"
-            "Используйте: `/set_group -1001234567890`",
+            "❌ Пожалуйста, укажите ID группы!\n\n"
+            "Пример: `/remove_group -1001234567890`",
+            parse_mode='Markdown')
+        return
+    
+    group_id_str = args[1]
+    
+    try:
+        group_id = int(group_id_str)
+        if group_id in messages_storage['group_ids']:
+            messages_storage['group_ids'].remove(group_id)
+            save_schedule(messages_storage)
+            bot.reply_to(message, 
+                f"✅ Группа удалена!\n\n"
+                f"📋 ID группы: `{group_id}`",
+                parse_mode='Markdown')
+            logger.info(f"Группа удалена: {group_id}")
+        else:
+            bot.reply_to(message, 
+                f"❌ Группа `{group_id}` не найдена в списке!",
+                parse_mode='Markdown')
+    except ValueError:
+        bot.reply_to(message, 
+            "❌ Неправильный ID группы!",
+            parse_mode='Markdown')
+
+
+@bot.message_handler(commands=['list_groups'])
+def list_groups(message):
+    """Команда /list_groups - Показать все добавленные группы"""
+    if not messages_storage['group_ids']:
+        bot.reply_to(message, 
+            "❌ Группы не добавлены!\n\n"
+            "Используйте: `/add_group -1001234567890`",
             parse_mode='Markdown')
     else:
-        bot.reply_to(message, 
-            f"📋 Текущая группа для отправки:\n`{messages_storage['group_id']}`",
-            parse_mode='Markdown')
+        groups_text = "📋 *Список групп для отправки:*\n\n"
+        for idx, gid in enumerate(messages_storage['group_ids'], 1):
+            groups_text += f"{idx}. `{gid}`\n"
+        bot.reply_to(message, groups_text, parse_mode='Markdown')
 
 
 @bot.message_handler(commands=['send'])
 def send_message_cmd(message):
-    """Команда /send - Отправить заготовленное сообщение"""
-    if messages_storage['group_id'] is None:
+    """Команда /send - Отправить заготовленное сообщение во все группы"""
+    if not messages_storage['group_ids']:
         bot.reply_to(message, 
-            "❌ Группа не установлена!\n\n"
-            "Используйте команду `/set_group` чтобы установить группу",
+            "❌ Группы не добавлены!\n\n"
+            "Используйте команду `/add_group` чтобы добавить группу",
             parse_mode='Markdown')
         return
     
     message_text = messages_storage['send_message_text']
-    try:
-        bot.send_message(
-            chat_id=messages_storage['group_id'],
-            text=f"📤 {message_text}",
-            parse_mode='Markdown'
-        )
-        bot.reply_to(message, f"✅ Сообщение отправлено в группу!\n\n{message_text}", 
-                     parse_mode='Markdown')
-        logger.info(f"Сообщение отправлено в группу {messages_storage['group_id']}")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка при отправке: {str(e)}", parse_mode='Markdown')
-        logger.error(f"Ошибка при отправке: {e}")
+    success_count = 0
+    
+    for group_id in messages_storage['group_ids']:
+        try:
+            bot.send_message(
+                chat_id=group_id,
+                text=f"📤 {message_text}",
+                parse_mode='Markdown'
+            )
+            success_count += 1
+            logger.info(f"Сообщение отправлено в группу {group_id}")
+        except Exception as e:
+            logger.error(f"Ошибка при отправке в группу {group_id}: {e}")
+    
+    bot.reply_to(message, 
+        f"✅ Сообщение отправлено в {success_count}/{len(messages_storage['group_ids'])} групп(ы)!\n\n{message_text}", 
+        parse_mode='Markdown')
 
 
 @bot.message_handler(commands=['set_schedule'])
@@ -300,6 +341,11 @@ def help_command(message):
 
 *📅 /week_schedule* - Управление расписанием на неделю
 
+Ежедневные отправки (одни и те же времена каждый день):
+*➕ /add_daily <Время> <Текст>* - Добавить ежедневную отправку
+*❌ /remove_daily <Время>* - Удалить время из ежедневного расписания
+*📊 /show_daily* - Показать ежедневное расписание
+
 *📋 /status* - Показать все текущие настройки
 
 *ℹ️ /help* - Показать эту справку
@@ -326,6 +372,11 @@ def week_schedule_menu(message):
 *🔄 /clear_week* - Очистить всё расписание
 
 Дни недели: monday, tuesday, wednesday, thursday, friday, saturday, sunday
+
+Также, если нужно одно и то же время каждый день, используйте ежедневные команды:
+*➕ /add_daily <Время> <Текст>* — добавить ежедневную отправку
+*❌ /remove_daily <Время>* — удалить ежедневную отправку
+*📊 /show_daily* — показать ежедневное расписание
     """
     bot.reply_to(message, help_text, parse_mode='Markdown')
 
@@ -366,15 +417,38 @@ def add_schedule(message):
             parse_mode='Markdown')
         return
     
-    # Добавляем в расписание
+    # Добавляем в расписание (повтор по неделям)
     messages_storage['weekly_schedule'][day][time_str] = schedule_text
+
+    # Создаём одноразовые отправки на ближайшие N дней (включая сегодня)
+    N = 3
+    now = datetime.now()
+    for i in range(N):
+        dt = now + timedelta(days=i)
+        date_str = dt.strftime('%Y-%m-%d')
+        # создаём запись для даты
+        messages_storage.setdefault('one_off', {}).setdefault(date_str, {})[time_str] = schedule_text
+
     save_schedule(messages_storage)  # СОХРАНЯЕМ!
-    
+
+    # Вычисляем, будет ли первая отправка сегодня или позже (по серверному времени)
+    today_day = DAYS_RU[now.weekday()]
+    first_send_note = ''
+    try:
+        send_time_obj = datetime.strptime(time_str, '%H:%M').time()
+        if day == today_day and send_time_obj >= now.time():
+            first_send_note = f"\n\nℹ️ Первая отправка: сегодня ({DAYS_NAME_RU[day]}) в {time_str}."
+        else:
+            first_send_note = f"\n\nℹ️ Первая отправка: в следующую {DAYS_NAME_RU[day]} в {time_str}."
+    except Exception:
+        first_send_note = ''
+
     bot.reply_to(message, 
         f"✅ Добавлено!\n\n"
         f"📅 День: {DAYS_NAME_RU[day]}\n"
         f"⏰ Время: {time_str}\n"
-        f"📝 Текст: {schedule_text}",
+        f"📝 Текст: {schedule_text}{first_send_note}\n\n"
+        f"ℹ️ Также запланировано на ближайшие {N} дней (одноразово).",
         parse_mode='Markdown')
     logger.info(f"Добавлено расписание: {day} {time_str} - {schedule_text}")
 
@@ -422,16 +496,16 @@ def remove_schedule(message):
 @bot.message_handler(commands=['show_week'])
 def show_week(message):
     """Команда /show_week - Показать расписание на неделю"""
-    schedule_text = "📅 *Расписание на неделю:*\n\n"
+    schedule_text = "📅 *РАСПИСАНИЕ НА НЕДЕЛЮ:*\n\n"
     
     has_schedule = False
     for day_eng, day_ru in DAYS_NAME_RU.items():
         day_schedule = messages_storage['weekly_schedule'][day_eng]
         if day_schedule:
             has_schedule = True
-            schedule_text += f"*{day_ru}:*\n"
+            schedule_text += f"*📌 {day_ru}:*\n"
             for time, text in sorted(day_schedule.items()):
-                schedule_text += f"  ⏰ {time} - {text}\n"
+                schedule_text += f"   ⏰ {time} → {text}\n"
             schedule_text += "\n"
     
     if not has_schedule:
@@ -456,6 +530,75 @@ def clear_week(message):
     bot.reply_to(message, "✅ Расписание очищено!", parse_mode='Markdown')
 
 
+@bot.message_handler(commands=['add_daily'])
+def add_daily(message):
+    """Команда /add_daily <Время> <Текст> - Добавить время для ежедневной отправки"""
+    args = message.text.split(maxsplit=2)
+    if len(args) < 3:
+        bot.reply_to(message,
+            "❌ Неправильный формат!\n\nИспользуйте: `/add_daily 09:00 Текст сообщения`",
+            parse_mode='Markdown')
+        return
+
+    time_str = args[1]
+    schedule_text = args[2]
+    try:
+        datetime.strptime(time_str, '%H:%M')
+    except ValueError:
+        bot.reply_to(message,
+            "❌ Неправильный формат времени!\n\nИспользуйте формат: `ЧЧ:МИН` (например: `09:00`)",
+            parse_mode='Markdown')
+        return
+
+    messages_storage.setdefault('daily_schedule', {})[time_str] = schedule_text
+    save_schedule(messages_storage)
+    bot.reply_to(message, f"✅ Ежедневная отправка добавлена: {time_str} → {schedule_text}", parse_mode='Markdown')
+    logger.info(f"Добавлено ежедневное расписание: {time_str} - {schedule_text}")
+
+
+@bot.message_handler(commands=['remove_daily'])
+def remove_daily(message):
+    """Команда /remove_daily <Время> - Удалить время из ежедневного расписания"""
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        bot.reply_to(message,
+            "❌ Укажите время!\n\nПример: `/remove_daily 09:00`",
+            parse_mode='Markdown')
+        return
+
+    time_str = args[1]
+    daily = messages_storage.get('daily_schedule', {})
+    if time_str in daily:
+        del daily[time_str]
+        save_schedule(messages_storage)
+        bot.reply_to(message, f"✅ Ежедневная отправка {time_str} удалена.", parse_mode='Markdown')
+        logger.info(f"Удалено ежедневное время: {time_str}")
+    else:
+        bot.reply_to(message, "❌ Время не найдено в ежедневном расписании.", parse_mode='Markdown')
+
+
+@bot.message_handler(commands=['show_daily'])
+def show_daily(message):
+    """Показать ежедневное расписание"""
+    daily = messages_storage.get('daily_schedule', {})
+    if not daily:
+        bot.reply_to(message, "📅 Ежедневное расписание пусто.", parse_mode='Markdown')
+        return
+
+    text = "📅 *Ежедневное расписание:*\n\n"
+    for t, txt in sorted(daily.items()):
+        text += f"   ⏰ {t} → {txt}\n"
+    bot.reply_to(message, text, parse_mode='Markdown')
+
+
+@bot.message_handler(commands=['server_time'])
+def server_time(message):
+    """Показать текущее серверное время (полезно для проверки таймзоны)."""
+    now = datetime.now()
+    day = DAYS_NAME_RU[DAYS_RU[now.weekday()]]
+    bot.reply_to(message, f"🕒 Серверное время: {now.strftime('%Y-%m-%d %H:%M:%S')} ({day})", parse_mode='Markdown')
+
+
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     """Обработка текстовых сообщений - только в личном чате"""
@@ -470,43 +613,96 @@ def handle_message(message):
 def scheduled_sender():
     """Функция для отправки сообщений по расписанию"""
     global stop_scheduler
-    last_sent = {}
+    last_sent_times = set()  # Хранит уже отправленные времена
     
     while not stop_scheduler:
-        group_id = messages_storage['group_id']
+        try:
+            group_ids = messages_storage['group_ids']
+            
+            # Получаем текущий день и время
+            now = datetime.now()
+            current_day = DAYS_RU[now.weekday()]
+            current_time = now.strftime('%H:%M')
+            
+            # ОТЛАДКА: Показываем текущее время в начале минуты
+            if now.second == 0:
+                logger.info(f"⏰ Проверка: {current_time} ({DAYS_NAME_RU[current_day]})")
+            
+            # Получаем расписание на сегодня
+            day_schedule = messages_storage['weekly_schedule'].get(current_day, {})
+            daily_schedule = messages_storage.get('daily_schedule', {})
+            one_off_today = messages_storage.get('one_off', {}).get(now.strftime('%Y-%m-%d'), {})
+            
+            # Проверяем все времена в расписании
+            if group_ids:  # Если есть хотя бы одна группа
+                # Сначала проверяем недельное расписание
+                if day_schedule:
+                    for time_slot, schedule_text in day_schedule.items():
+                        send_key = f"{current_day}_{time_slot}"
+                        if time_slot == current_time and send_key not in last_sent_times:
+                            logger.info(f"✅ ОТПРАВКА (неделя) В {current_time}: {schedule_text}")
+                            for group_id in group_ids:
+                                try:
+                                    bot.send_message(
+                                        chat_id=group_id,
+                                        text=f"🤖 *{schedule_text}*",
+                                        parse_mode='Markdown'
+                                    )
+                                    logger.info(f"✅ ОТПРАВЛЕНО в группу {group_id} (неделя)!")
+                                except Exception as e:
+                                    logger.error(f"❌ Ошибка при отправке в группу {group_id} (неделя): {e}")
+                            last_sent_times.add(send_key)
+                        elif time_slot != current_time and send_key in last_sent_times:
+                            last_sent_times.discard(send_key)
+
+                # Затем ежедневное расписание (каждый день одинаково)
+                if daily_schedule:
+                    for time_slot, schedule_text in daily_schedule.items():
+                        send_key = f"daily_{time_slot}"
+                        if time_slot == current_time and send_key not in last_sent_times:
+                            logger.info(f"✅ ОТПРАВКА (ежедневно) В {current_time}: {schedule_text}")
+                            for group_id in group_ids:
+                                try:
+                                    bot.send_message(
+                                        chat_id=group_id,
+                                        text=f"🤖 *{schedule_text}*",
+                                        parse_mode='Markdown'
+                                    )
+                                    logger.info(f"✅ ОТПРАВЛЕНО в группу {group_id} (ежедневно)!")
+                                except Exception as e:
+                                    logger.error(f"❌ Ошибка при отправке в группу {group_id} (ежедневно): {e}")
+                            last_sent_times.add(send_key)
+                        elif time_slot != current_time and send_key in last_sent_times:
+                            last_sent_times.discard(send_key)
+
+                # Обработка одноразовых отправок на сегодня (независимо от ежедневного расписания)
+                if one_off_today:
+                    for time_slot, schedule_text in one_off_today.copy().items():
+                        send_key = f"oneoff_{now.strftime('%Y-%m-%d')}_{time_slot}"
+                        if time_slot == current_time and send_key not in last_sent_times:
+                            logger.info(f"✅ ОТПРАВКА (one-off) В {current_time}: {schedule_text}")
+                            for group_id in group_ids:
+                                try:
+                                    bot.send_message(
+                                        chat_id=group_id,
+                                        text=f"🤖 *{schedule_text}*",
+                                        parse_mode='Markdown'
+                                    )
+                                    logger.info(f"✅ ОТПРАВЛЕНО в группу {group_id} (one-off)!")
+                                except Exception as e:
+                                    logger.error(f"❌ Ошибка при отправке в группу {group_id} (one-off): {e}")
+                            last_sent_times.add(send_key)
+                            # удаляем одноразовую запись после отправки
+                            try:
+                                del messages_storage['one_off'][now.strftime('%Y-%m-%d')][time_slot]
+                            except Exception:
+                                pass
+                            save_schedule(messages_storage)
+                        elif time_slot != current_time and send_key in last_sent_times:
+                            last_sent_times.discard(send_key)
         
-        # Получаем текущий день и время
-        now = datetime.now()
-        current_day = DAYS_RU[now.weekday()]
-        current_time = now.strftime('%H:%M')
-        
-        # ОТЛАДКА: Показываем текущее время и расписание каждую минуту
-        day_schedule = messages_storage['weekly_schedule'][current_day]
-        if now.second == 0:  # Только в начале минуты
-            logger.info(f"⏰ Текущее время: {current_time} ({DAYS_NAME_RU[current_day]})")
-            logger.info(f"📅 Расписание на сегодня: {day_schedule}")
-        
-        # Проверяем еженедельное расписание
-        if day_schedule and group_id is not None:
-            for time_slot, schedule_text in day_schedule.items():
-                key = f"{current_day}_{time_slot}"
-                
-                # Проверяем если время совпадает и мы ещё не отправили в эту минуту
-                if time_slot == current_time and key not in last_sent:
-                    try:
-                        bot.send_message(
-                            chat_id=group_id,
-                            text=f"🤖 *{schedule_text}*",
-                            parse_mode='Markdown'
-                        )
-                        logger.info(f"✅ ОТПРАВЛЕНО В {current_time}: {schedule_text}")
-                        last_sent[key] = True
-                    except Exception as e:
-                        logger.error(f"❌ Ошибка при отправке: {e}")
-                
-                # Очищаем память если прошла минута
-                elif time_slot != current_time and key in last_sent:
-                    del last_sent[key]
+        except Exception as e:
+            logger.error(f"❌ Ошибка в scheduled_sender: {e}")
         
         time.sleep(1)
 
